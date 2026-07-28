@@ -1,0 +1,16 @@
+# --- DATA (exclude large files from the repository)) ---
+data/raw/*
+!data/raw/.gitkeep
+
+data/processed/*
+!data/processed/.gitkeep
+
+# --- SECURITY (API Keys and Secrets) ---
+.env
+*.json
+!data/raw/.gitkeep
+
+# --- PYTHON AND SYSTEM WASTE ---
+__pycache__/
+*.pyc
+.DS_Store
