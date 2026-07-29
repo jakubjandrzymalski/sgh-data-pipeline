@@ -7,8 +7,6 @@ data/processed/*
 
 # --- SECURITY (API Keys and Secrets) ---
 .env
-*.json
-!data/raw/.gitkeep
 
 # --- PYTHON AND SYSTEM WASTE ---
 __pycache__/
