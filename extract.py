@@ -1,6 +1,11 @@
 import os
 import json
 import requests
+from dotenv import load_dotenv
+
+# load environment variables from the .env file into memory
+
+load_dotenv()
 
 # helper function to convert raw data to JSON
 
@@ -21,8 +26,12 @@ def raw_to_json(response, symbol):
 
 def data_extraction_alpha_vantage():
 
-    # key to www.alphavantage.co
-    API_key = "2Q0XQQHEPHBNRE8L"
+    # key to www.alphavantage.co from  the environment variables
+    API_key = os.getenv("ALPHA_VANTAGE_API_KEY")
+
+    # checking if key exist
+    if not API_key:
+        raise ValueError("API key missing! Make sure the .env file contains ALPHA_VANTAGE_API_KEY.")
 
     # make a directory to save raw data
     os.makedirs("data/raw", exist_ok=True)
@@ -41,10 +50,14 @@ def data_extraction_alpha_vantage():
 
         print(f'Request for data {CompSymb} sent')
 
-        # get company data
-        response = requests.get(url)
+        # get company data and added the parameter timeout=10 (network security measure)
+        try:
+            response = requests.get(url, timeout=10)
+            raw_to_json(response , CompSymb)
 
-        raw_to_json(response , CompSymb)
+        except requests.exceptions.RequestException as e:
+            print(f'Network error for {CompSymb}: {e}')
+
 
 
 #____crypto____
@@ -61,9 +74,14 @@ def data_extraction_alpha_vantage():
         print(f'Request for data {CrypSymb} sent')
 
         # get crypto data
-        response = requests.get(url)
+        try:
+            response = requests.get(url, timeout=10)
 
-        raw_to_json(response , CrypSymb)
+            raw_to_json(response , CrypSymb)
+
+        except requests.exceptions.RequestException as e:
+            print(f'Network error for {CompSymb}: {e}')
+
 
 
 
