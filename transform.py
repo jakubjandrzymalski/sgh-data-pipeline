@@ -6,8 +6,11 @@ import pandas as pd
 # search for files that match the pattern
 input_files = glob.glob("data/raw/*_daily.json")
 
+dfs = []
+
 
 for file_path in input_files:
+
 
     # open the file for reading with right encoding
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -67,5 +70,12 @@ for file_path in input_files:
     output_path = f"data/processed/{symbol}_daily.csv"
     df.to_csv(output_path, index=False)
 
+    dfs.append(df)
+
     print(f"Successfully processed data: {symbol} -> {output_path}")
 
+# conecting DF to one
+combined_df = pd.concat(dfs, ignore_index= True)
+
+# saved to one conument
+combined_df.to_csv("data/processed/combined_assets_daily.csv", index=False)

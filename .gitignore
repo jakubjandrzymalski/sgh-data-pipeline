@@ -2,8 +2,11 @@
 data/raw/*
 !data/raw/.gitkeep
 
+
 data/processed/*
 !data/processed/.gitkeep
+
+*.db
 
 # --- SECURITY (API Keys and Secrets) ---
 .env
