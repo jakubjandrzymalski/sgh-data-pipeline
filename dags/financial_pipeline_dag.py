@@ -19,9 +19,13 @@ def run_extraction():
     from src.cloud_s3.s3_extract_cloud import data_extraction_alpha_vantage
     data_extraction_alpha_vantage()
 
-def run_transformation():
-    from src.cloud_s3.s3_transform_cloud import transform_data_s3
-    transform_data_s3()
+def run_transform_to_silver():
+    from src.cloud_s3.s3_transform_cloud import transform_to_silver
+    transform_to_silver()
+
+def run_enrich_to_gold():
+    from src.cloud_s3.s3_transform_cloud import enrich_to_gold
+    enrich_to_gold()
 
 with DAG(
     dag_id='sgh_financial_data_pipeline',
@@ -38,9 +42,14 @@ with DAG(
         python_callable=run_extraction
     )
 
-    task_transform = PythonOperator(
-        task_id='transform_json_to_parquet_pyspark',
-        python_callable=run_transformation
+    task_transform_silver = PythonOperator(
+        task_id='transform_to_silver',
+        python_callable=run_transform_to_silver
     )
 
-    task_extract >> task_transform
+    task_transform_gold = PythonOperator(
+        task_id='enrich_to_gold',
+        python_callable=run_enrich_to_gold
+    )
+
+    task_extract >> task_transform_silver >> task_transform_gold

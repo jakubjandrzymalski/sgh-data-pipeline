@@ -3,6 +3,7 @@ import sys
 import json
 import shutil
 import boto3
+import pandas as pd
 from dotenv import load_dotenv
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
@@ -13,7 +14,10 @@ load_dotenv()
 
 # Define S3 prefixes and temporary local directory
 S3_RAW_PREFIX = "raw/"
-S3_PROCESSED_PARQUET_DIR = "processed/combined_assets_daily.parquet"
+# Silver: cleaned, standardized OHLCV data (before technical indicators)
+S3_PROCESSED_SILVER_DIR = "processed/silver/combined_assets_daily.parquet"
+# Gold: Silver + SMA-14/EMA-14, ready for the Athena/Power BI analytical layer
+S3_PROCESSED_GOLD_DIR = "processed/gold/combined_assets_daily.parquet"
 TEMP_PARQUET_DIR = "data/temp_parquet"
 
 def get_spark_session():
@@ -26,8 +30,36 @@ def get_spark_session():
         .config("spark.driver.memory", "2g") \
         .getOrCreate()
 
-def transform_data_s3():
-    # Load AWS credentials from environment
+def write_parquet_to_s3(spark_df, s3_client, bucket_name, s3_prefix, local_filename):
+    """Write a Spark DataFrame to local Parquet, then upload it to the given S3 prefix."""
+    if os.path.exists(TEMP_PARQUET_DIR):
+        shutil.rmtree(TEMP_PARQUET_DIR)
+    os.makedirs(TEMP_PARQUET_DIR, exist_ok=True)
+
+    parquet_file_path = os.path.join(TEMP_PARQUET_DIR, local_filename)
+    spark_df.toPandas().to_parquet(parquet_file_path, index=False)
+
+    s3_key = f"{s3_prefix}/{local_filename}"
+    print(f"Uploading Parquet file to S3: s3://{bucket_name}/{s3_key}")
+    s3_client.upload_file(parquet_file_path, bucket_name, s3_key)
+
+    if os.path.exists(TEMP_PARQUET_DIR):
+        shutil.rmtree(TEMP_PARQUET_DIR)
+
+def read_parquet_from_s3(spark, s3_client, bucket_name, s3_prefix, local_filename):
+    """Download a Parquet file from the given S3 prefix and load it into a Spark DataFrame."""
+    if os.path.exists(TEMP_PARQUET_DIR):
+        shutil.rmtree(TEMP_PARQUET_DIR)
+    os.makedirs(TEMP_PARQUET_DIR, exist_ok=True)
+
+    s3_key = f"{s3_prefix}/{local_filename}"
+    parquet_file_path = os.path.join(TEMP_PARQUET_DIR, local_filename)
+    print(f"Downloading Parquet file from S3: s3://{bucket_name}/{s3_key}")
+    s3_client.download_file(bucket_name, s3_key, parquet_file_path)
+
+    return spark.createDataFrame(pd.read_parquet(parquet_file_path))
+
+def get_s3_client():
     aws_access_key = os.getenv("AWS_ACCESS_KEY_ID")
     aws_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
     aws_region = os.getenv("AWS_REGION", "us-east-1")
@@ -36,13 +68,18 @@ def transform_data_s3():
     if not all([aws_access_key, aws_secret_key, bucket_name]):
         raise ValueError("AWS Credentials or Bucket Name missing in .env file!")
 
-    # Connect to AWS S3 client
     s3_client = boto3.client(
         's3',
         aws_access_key_id=aws_access_key,
         aws_secret_access_key=aws_secret_key,
         region_name=aws_region
     )
+    return s3_client, bucket_name
+
+def transform_to_silver():
+    """Task 1: extract raw JSON from S3, clean/standardize it and write it to the Silver layer."""
+    # Connect to AWS S3 client
+    s3_client, bucket_name = get_s3_client()
 
     # List all objects in the raw/ folder in S3
     print(f"Reading file list from S3: s3://{bucket_name}/{S3_RAW_PREFIX}")
@@ -101,6 +138,25 @@ def transform_data_s3():
     # Data type conversion
     spark_df = spark_df.withColumn("date", F.to_date(F.col("date")))
 
+    # --- SILVER LAYER: cleaned and standardized data, before technical indicators ---
+    write_parquet_to_s3(spark_df, s3_client, bucket_name, S3_PROCESSED_SILVER_DIR, "combined_assets.parquet")
+
+    print("Successfully finished Silver layer transformation and S3 Parquet upload!")
+
+    # Stop Spark Session
+    spark.stop()
+
+def enrich_to_gold():
+    """Task 2: read the Silver layer back from S3, calculate SMA-14/EMA-14 and write the Gold layer."""
+    # Connect to AWS S3 client
+    s3_client, bucket_name = get_s3_client()
+
+    # Start PySpark Session
+    spark = get_spark_session()
+
+    # Read the Silver layer back from S3
+    spark_df = read_parquet_from_s3(spark, s3_client, bucket_name, S3_PROCESSED_SILVER_DIR, "combined_assets.parquet")
+
     #  --- CALCULATING MOVING AVERAGES (SMA-14 and EMA-14) ---
     window_14 = Window.partitionBy("symbol").orderBy("date").rowsBetween(-13, 0)
     window_ordered = Window.partitionBy("symbol").orderBy("date")
@@ -122,29 +178,14 @@ def transform_data_s3():
     # Final sorting
     spark_df = spark_df.sort(F.col("symbol"), F.col("date").desc())
 
-    # Clean up local temporary folder
-    if os.path.exists(TEMP_PARQUET_DIR):
-        shutil.rmtree(TEMP_PARQUET_DIR)
-    os.makedirs(TEMP_PARQUET_DIR, exist_ok=True)
+    # --- GOLD LAYER: Silver + SMA-14/EMA-14, ready for Athena/Power BI ---
+    write_parquet_to_s3(spark_df, s3_client, bucket_name, S3_PROCESSED_GOLD_DIR, "combined_assets.parquet")
 
-    # Export DataFrame locally to Parquet via PyArrow
-    print("Writing DataFrame locally to Parquet format...")
-    parquet_file_path = os.path.join(TEMP_PARQUET_DIR, "combined_assets.parquet")
-    spark_df.toPandas().to_parquet(parquet_file_path, index=False)
+    print("Successfully finished Gold layer transformation and S3 Parquet upload!")
 
-    # Upload converted Parquet file to AWS S3
-    print(f"Uploading Parquet file to S3: s3://{bucket_name}/{S3_PROCESSED_PARQUET_DIR}")
-    s3_key = f"{S3_PROCESSED_PARQUET_DIR}/combined_assets.parquet"
-    s3_client.upload_file(parquet_file_path, bucket_name, s3_key)
-
-    # Clean up local temporary files
-    if os.path.exists(TEMP_PARQUET_DIR):
-        shutil.rmtree(TEMP_PARQUET_DIR)
-
-    print("Successfully finished PySpark transformation and S3 Parquet upload!")
-    
     # Stop Spark Session
     spark.stop()
 
 if __name__ == "__main__":
-    transform_data_s3()
+    transform_to_silver()
+    enrich_to_gold()
